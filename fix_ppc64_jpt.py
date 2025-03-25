@@ -3,6 +3,7 @@ import idaapi
 from idaapi import *
 from idc import *
 
+
 def find_ncases(ea, reg):
 
 	limit = ea - 0x500
@@ -36,7 +37,37 @@ def find_ncases(ea, reg):
 	return 0
 
 
-def jump_table_search():
+def create_table(bctr_ea, ncases, regnum):
+
+	# Setup valid switch info and create table.
+	si = ida_nalt.switch_info_t()
+	si.set_jtable_element_size(4)
+	si.set_jtable_size(ncases)
+	si.ncases = ncases
+	si.startea = bctr_ea
+	si.jumps = bctr_ea + 4
+	si.elbase = bctr_ea + 4
+	si.set_shift(0)
+	si.regnum = regnum
+	si.lowcase = 0 # 0 is ok for most tables. To handle this, much more code is needed.
+	si.flags = idaapi.SWI_SIGNED | idaapi.SWI_ELBASE | idaapi.SWI_J32
+	si.flags2 = 0
+	del_items(si.jumps, 4, ncases * 4)
+	idaapi.set_switch_info(bctr_ea, si)
+	idaapi.create_switch_table(bctr_ea, si)
+	
+	# Ok... This is stupid, but it's required.
+	# When jump table with invalid values is in function,
+	# IDA asks auto analyzer to redefine function after new jump table
+	# boundaries are set. For unknown reason this break jump table again.
+	# But if we recreate jump table info again after auto analyze, IDA is happy.
+	if get_func_flags(bctr_ea) != -1:
+		auto_wait()
+		idaapi.set_switch_info(bctr_ea, si)
+		idaapi.create_switch_table(bctr_ea, si)
+
+
+def do_all_tables():
 
 	address = 0
 	old_si = ida_nalt.switch_info_t()
@@ -52,13 +83,15 @@ def jump_table_search():
 		else:
 			address = idaapi.find_binary(address, idaapi.BADADDR, "4E 80 04 20", 0x10, SEARCH_DOWN)
 
-		if address < idaapi.BADADDR and idaapi.get_switch_info(old_si, address) != None:#old_si.startea != ida_idaapi.BADADDR:
+		if address < idaapi.BADADDR and idaapi.get_switch_info(old_si, address) != None:
 			bctr_ea = address
+
 			if old_si.regnum == -1:
 				print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
-				print("Regnum = {:d}".format(old_si.regnum))
+				print("Regnum = -1")
 				address += 4
 				continue
+
 			ncases = find_ncases(bctr_ea, old_si.regnum)
 			if ncases == 0:
 				print("Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
@@ -66,57 +99,116 @@ def jump_table_search():
 				address += 4
 				continue
 
-			# Setup valid switch info and create table.
-			si = ida_nalt.switch_info_t()
-			si.set_jtable_element_size(4)
-			si.set_jtable_size(ncases)
-			si.ncases = ncases
-			si.startea = bctr_ea
-			si.jumps = bctr_ea + 4
-			si.elbase = bctr_ea + 4
-			si.set_shift(0)
-			si.regnum = old_si.regnum
-			si.lowcase = 0 # 0 is ok for most tables. To handle this, much more code is needed.
-			si.flags = idaapi.SWI_SIGNED | idaapi.SWI_ELBASE | idaapi.SWI_J32
-			si.flags2 = 0
-			del_items(si.jumps, 4, ncases * 4)
-			idaapi.set_switch_info(bctr_ea, si)
-			idaapi.create_switch_table(bctr_ea, si)
-			
-			# Ok... This is stupid, but it's required.
-			# When jump table with invalid values is in function,
-			# IDA asks auto analyzer to redefine function after new jump table
-			# boundaries are set. For unknown reason this break jump table again.
-			# But if we recreate jump table info again after auto analyze, IDA is happy.
-			if get_func_flags(bctr_ea) != -1:
-				#fnc_start = get_func_attr(bctr_ea, idc.FUNCATTR_START)
-				#fnc_end = find_func_end(fnc_start)
-				#print("start = 0x{:08X} , end = 0x{:08X}".format(fnc_start, fnc_end))
-				#auto_mark_range(fnc_start, fnc_end, idaapi.AU_USED);
-				auto_wait()
-				idaapi.set_switch_info(bctr_ea, si)
-				idaapi.create_switch_table(bctr_ea, si)
-
+			create_table(bctr_ea, ncases, old_si.regnum)
 
 		address += 4
+
+
+def do_single_table():
+
+	bctr_ea = get_screen_ea()
+	if print_insn_mnem(bctr_ea) != "bctr":
+		print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
+		print("Selected opcode is not bctr!")
+		return
+
+	old_si = ida_nalt.switch_info_t()
+	if idaapi.get_switch_info(old_si, bctr_ea) == None:
+		print("Unable to recreate jump table at: 0x{:08X}".format(bctr_ea))
+		print("Retrieving old table info failed!")		
+		return
+
+	if old_si.regnum == -1:
+		print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
+		print("Regnum = -1")
+		return
+
+	ncases = find_ncases(bctr_ea, old_si.regnum)
+	if ncases == 0:
+		print("Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
+		print("ncases = 0")
+		return
+
+	create_table(bctr_ea, ncases, old_si.regnum)
+
+
+class ActionHandler(idaapi.action_handler_t):
+
+    def __init__(self, callback):
+        
+        idaapi.action_handler_t.__init__(self)
+        self.callback = callback
+    
+    def activate(self, ctx):
+
+        self.callback()
+        return 1
+
+    def update(self, ctx):
+        
+        return idaapi.AST_ENABLE_ALWAYS
+
+
+def register_actions():   
+
+    actions = [
+        {
+            'id': 'start:do_single_table',
+            'name': 'Fix PowerPC jump table.',
+            'hotkey': 'Alt-Shift-4',
+            'comment': 'Fix PowerPC jump table.',
+            'callback': do_single_table,
+            'menu_location': ''
+        },
+        {
+            'id': 'start:do_all_tables',
+            'name': 'Fix PowerPC jump tables.',
+            'hotkey': 'Alt-Shift-5',
+            'comment': 'Fix PowerPC jump tables.',
+            'callback': do_all_tables,
+            'menu_location': ''
+        }
+    ]
+
+
+    for action in actions:
+
+        if not idaapi.register_action(idaapi.action_desc_t(
+            action['id'], # Must be the unique item
+            action['name'], # The name the user sees
+            ActionHandler(action['callback']), # The function to call
+            action['hotkey'], # A shortcut, if any (optional)
+            action['comment'] # A comment, if any (optional)
+        )):
+
+            print('Failed to register ' + action['id'])
+
+        #if not idaapi.attach_action_to_menu(
+        #    action['menu_location'], # The menu location
+        #    action['id'], # The unique function ID
+        #    0):
+		#
+        #    print('Failed to attach to menu '+ action['id'])
+
 
 
 class fix_ppcjt_t(idaapi.plugin_t):
 	flags = idaapi.PLUGIN_UNL
 	comment = "Fix PowerPC jump tables."
-	help = "Press Alt + Shift + 5 to Fix PPCJT"
+	help = ""
 	wanted_name = "Fix PPCJT"
-	wanted_hotkey = "Alt-Shift-5"
+	wanted_hotkey = ""
 
 	def init(self):
 		if idaapi.ph.id == idaapi.PLFM_PPC:
 			idaapi.msg("Fix PPCJT loaded.\n")
+			register_actions()
 			return idaapi.PLUGIN_KEEP
 
 		return idaapi.PLUGIN_SKIP
 	
 	def run(self, arg):
-		jump_table_search()
+		idaapi.msg("Fix PPCJT run.\n")
 	
 	def term(self):
 		pass
