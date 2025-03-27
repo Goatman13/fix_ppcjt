@@ -25,12 +25,19 @@ def find_ncases(ea, reg):
 			while temp_ea < limit+0x500:
 				branch = print_insn_mnem(temp_ea)[0:3] # 3 characters (handle bgtlr etc.)
 				if branch in ["ble", "bgt", "bge", "blt"] and print_operand(temp_ea, 0) == condition_reg:
+					default_jump = -1
+					if print_operand(temp_ea, 1) != "lr":
+						if branch in ["bgt", "bge"]:
+							default_jump = get_operand_value(temp_ea, 1)
+						else:
+							default_jump = temp_ea + 4
+
 					if branch in ["ble", "bgt"]:
 						ncases = get_operand_value(ea, 2) + 1
 					else:
 						ncases = get_operand_value(ea, 2)
 					set_cmt(ea, "switch {:d} cases".format(ncases), 0)
-					return ncases
+					return ncases, default_jump
 
 				temp_ea += 4
 				
@@ -39,7 +46,7 @@ def find_ncases(ea, reg):
 	return 0
 
 
-def create_table(bctr_ea, ncases, regnum):
+def create_table(bctr_ea, ncases, default_case, regnum):
 
 	# Setup valid switch info and create table.
 	si = ida_nalt.switch_info_t()
@@ -52,6 +59,8 @@ def create_table(bctr_ea, ncases, regnum):
 	si.set_shift(0)
 	si.regnum = regnum
 	si.lowcase = 0 # 0 is ok for most tables. To handle this, much more code is needed.
+	if default_case != -1:
+		si.defjump = default_case
 	si.flags = idaapi.SWI_SIGNED | idaapi.SWI_ELBASE | idaapi.SWI_J32
 	si.flags2 = 0
 	del_items(si.jumps, 4, ncases * 4)
@@ -72,7 +81,7 @@ def create_table(bctr_ea, ncases, regnum):
 def do_all_tables():
 
 	if auto_is_ok() == False:
-		print("Please wait for autoanalyzer to finish and try again.")
+		print("[Fix PPCJT] Please wait for autoanalyzer to finish and try again.")
 		return
 
 	address = 0
@@ -94,19 +103,19 @@ def do_all_tables():
 			bctr_ea = address
 
 			if old_si.regnum == -1:
-				print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
-				print("Regnum = -1")
+				print("[Fix PPCJT] Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
+				print("[Fix PPCJT] Regnum = -1")
 				address += 4
 				continue
 
-			ncases = find_ncases(bctr_ea, old_si.regnum)
+			ncases, default_case = find_ncases(bctr_ea, old_si.regnum)
 			if ncases == 0:
-				print("Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
-				print("ncases = 0")
+				print("[Fix PPCJT] Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
+				print("[Fix PPCJT] ncases = 0")
 				address += 4
 				continue
 
-			create_table(bctr_ea, ncases, old_si.regnum)
+			create_table(bctr_ea, ncases, default_case, old_si.regnum)
 
 		address += 4
 
@@ -114,33 +123,33 @@ def do_all_tables():
 def do_single_table():
 
 	if auto_is_ok() == False:
-		print("Please wait for autoanalyzer to finish and try again.")
+		print("[Fix PPCJT] Please wait for autoanalyzer to finish and try again.")
 		return
 	
 	bctr_ea = get_screen_ea()
 	if print_insn_mnem(bctr_ea) != "bctr":
-		print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
-		print("Selected opcode is not bctr!")
+		print("[Fix PPCJT] Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
+		print("[Fix PPCJT] Selected opcode is not bctr!")
 		return
 
 	old_si = ida_nalt.switch_info_t()
 	if idaapi.get_switch_info(old_si, bctr_ea) == None:
-		print("Unable to recreate jump table at: 0x{:08X}".format(bctr_ea))
-		print("Retrieving old table info failed!")		
+		print("[Fix PPCJT] Unable to recreate jump table at: 0x{:08X}".format(bctr_ea))
+		print("[Fix PPCJT] Retrieving old table info failed!")		
 		return
 
 	if old_si.regnum == -1:
-		print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
-		print("Regnum = -1")
+		print("[Fix PPCJT] Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
+		print("[Fix PPCJT] Regnum = -1")
 		return
 
-	ncases = find_ncases(bctr_ea, old_si.regnum)
+	ncases, default_case = find_ncases(bctr_ea, old_si.regnum)
 	if ncases == 0:
-		print("Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
-		print("ncases = 0")
+		print("[Fix PPCJT] Ivalid jump table found at: 0x{:08X}".format(bctr_ea))
+		print("[Fix PPCJT] ncases = 0")
 		return
 
-	create_table(bctr_ea, ncases, old_si.regnum)
+	create_table(bctr_ea, ncases, default_case, old_si.regnum)
 
 
 class ActionHandler(idaapi.action_handler_t):
