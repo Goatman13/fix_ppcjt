@@ -1,5 +1,7 @@
 import ida_nalt
 import idaapi
+import ida_auto
+from ida_auto import *
 from idaapi import *
 from idc import *
 
@@ -14,7 +16,7 @@ def find_ncases(ea, reg):
 			# Reset limit to new ea
 			limit = ea - 0x500
 			# Only one cref is supported for now,
-			#99% of binaries should be fine anyway.
+			# 99% of binaries should be fine anyway.
 			already_jumped = 1
 
 		if print_insn_mnem(ea) in ["cmplwi", "cmpldi"] and get_operand_value(ea, 1) == reg:
@@ -69,10 +71,15 @@ def create_table(bctr_ea, ncases, regnum):
 
 def do_all_tables():
 
+	if auto_is_ok() == False:
+		print("Please wait for autoanalyzer to finish and try again.")
+		return
+
 	address = 0
 	old_si = ida_nalt.switch_info_t()
 	while address < idaapi.BADADDR:
 		
+		# Borrowed from https://github.com/SocraticBliss/ps4_module_loader
 		if idaapi.IDA_SDK_VERSION > 760:
 			binpat = idaapi.compiled_binpat_vec_t()
 			idaapi.parse_binpat_str(binpat, address, "4E 80 04 20", 0x10)
@@ -106,6 +113,10 @@ def do_all_tables():
 
 def do_single_table():
 
+	if auto_is_ok() == False:
+		print("Please wait for autoanalyzer to finish and try again.")
+		return
+	
 	bctr_ea = get_screen_ea()
 	if print_insn_mnem(bctr_ea) != "bctr":
 		print("Unable to resolve jump table at: 0x{:08X}".format(bctr_ea))
@@ -154,11 +165,11 @@ def register_actions():
     actions = [
         {
             'id': 'start:do_single_table',
-            'name': 'Fix PowerPC jump table.',
+            'name': 'Fix single PowerPC jump table.',
             'hotkey': 'Alt-Shift-4',
             'comment': 'Fix PowerPC jump table.',
             'callback': do_single_table,
-            'menu_location': ''
+            'menu_location': 'Edit/Other/'
         },
         {
             'id': 'start:do_all_tables',
@@ -166,7 +177,7 @@ def register_actions():
             'hotkey': 'Alt-Shift-5',
             'comment': 'Fix PowerPC jump tables.',
             'callback': do_all_tables,
-            'menu_location': ''
+            'menu_location': 'Edit/Other/'
         }
     ]
 
@@ -183,17 +194,17 @@ def register_actions():
 
             print('Failed to register ' + action['id'])
 
-        #if not idaapi.attach_action_to_menu(
-        #    action['menu_location'], # The menu location
-        #    action['id'], # The unique function ID
-        #    0):
-		#
-        #    print('Failed to attach to menu '+ action['id'])
+        if not idaapi.attach_action_to_menu(
+            action['menu_location'], # The menu location
+            action['id'], # The unique function ID
+            1):
+		
+            print('Failed to attach to menu '+ action['id'])
 
 
 
 class fix_ppcjt_t(idaapi.plugin_t):
-	flags = idaapi.PLUGIN_UNL
+	flags = idaapi.PLUGIN_UNL | idaapi.PLUGIN_HIDE
 	comment = "Fix PowerPC jump tables."
 	help = ""
 	wanted_name = "Fix PPCJT"
@@ -212,6 +223,7 @@ class fix_ppcjt_t(idaapi.plugin_t):
 	
 	def term(self):
 		pass
+
 
 def PLUGIN_ENTRY():
 	return fix_ppcjt_t()
