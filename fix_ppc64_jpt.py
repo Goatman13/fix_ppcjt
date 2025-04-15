@@ -5,25 +5,40 @@ from ida_auto import *
 from idaapi import *
 from idc import *
 
+DEBUG = 0
 
 def find_ncases(ea, reg):
 
 	limit = ea - 0x500
 	already_jumped = 0
 	while ea > limit:
-		if get_first_cref_to(ea) != idaapi.BADADDR and already_jumped == 0:
-			ea = get_first_cref_to(ea)
-			# Reset limit to new ea
-			limit = ea - 0x500
-			# Only one cref is supported for now,
-			# 99% of binaries should be fine anyway.
-			already_jumped = 1
-
+		check_ea = get_first_cref_to(ea)
+		if DEBUG:
+			print("ea   : " + hex(ea))
+			print("check: " + hex(check_ea))
+		if print_insn_mnem(ea) not in ["cmplwi", "cmpldi"] or get_operand_value(ea, 1) != reg:
+			if check_ea != idaapi.BADADDR and check_ea != ea - 4 and already_jumped < 3:
+				if get_func_attr(ea, FUNCATTR_START) == get_first_cref_to(ea):
+					# Give up if we reached function start..
+					print("[Fix PPCJT] Reached function start.")
+					break
+				ea = get_first_cref_to(ea)
+				if DEBUG:
+					print(hex(ea))
+					print(already_jumped)
+				limit = ea - 0x500
+				already_jumped += 1
+		
+		if DEBUG:
+			print(print_insn_mnem(ea))
 		if print_insn_mnem(ea) in ["cmplwi", "cmpldi"] and get_operand_value(ea, 1) == reg:
 			condition_reg = print_operand(ea, 0)
 			temp_ea = ea + 4
-			while temp_ea < limit+0x500:
+			while temp_ea < ea+0x500:
 				branch = print_insn_mnem(temp_ea)[0:3] # 3 characters (handle bgtlr etc.)
+				if DEBUG:
+					print("temp_ea   : " + hex(temp_ea))
+					print("branch    : " + branch)
 				if branch in ["ble", "bgt", "bge", "blt"] and print_operand(temp_ea, 0) == condition_reg:
 					default_jump = -1
 					if print_operand(temp_ea, 1) != "lr":
@@ -43,7 +58,7 @@ def find_ncases(ea, reg):
 				
 		ea -= 4
 	
-	return 0
+	return 0, -1
 
 
 def create_table(bctr_ea, ncases, default_case, regnum):
